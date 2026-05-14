@@ -9,7 +9,6 @@ from database import get_connection
 
 def classificar_categoria(texto):
     texto = texto.lower()
-    # Filtro absoluto via regex boundaries (\b) para impedir falsos positivos por substrings
     if re.search(r'\b(polícia|preso|acidente|roubo|bombeiros|pm|furto|crime|investigação|morte|assassinato|tráfico|drogas|colisão|capotar)\b', texto): return 'Segurança Pública'
     if re.search(r'\b(futebol|campeonato|torneio|time|atleta|jogo|esporte|copa|medalha)\b', texto): return 'Esporte'
     if re.search(r'\b(prefeitura|câmara|vereadores|imposto|obras|projeto|licitação|prefeito|governo|iptu|política)\b', texto): return 'Cidadania'
@@ -18,6 +17,20 @@ def classificar_categoria(texto):
     if re.search(r'\b(festa|show|evento|festival|programação|ingresso|exposição|cultura|música)\b', texto): return 'Eventos'
     if re.search(r'\b(agronegócio|safra|soja|rural|colheita|gado|chuva|plantio|fazenda|agricultura)\b', texto): return 'Agronegócio'
     return 'Notícias Gerais'
+
+def extrair_cidade(texto, cidades_lista):
+    encontradas = set()
+    texto_lower = texto.lower()
+    for cidade in cidades_lista:
+        # Busca a cidade como uma palavra inteira para evitar falsos positivos
+        if re.search(fr'\b{re.escape(cidade)}\b', texto_lower):
+            encontradas.add(cidade.title())
+            
+    if len(encontradas) == 1:
+        return list(encontradas)[0] # Achou uma exata
+    elif len(encontradas) > 1:
+        return 'Região' # Achou mais de uma, classifica como Região
+    return None # Não achou nenhuma
 
 def varredura_inteligente():
     db = get_connection()
@@ -40,7 +53,7 @@ def varredura_inteligente():
             if fonte['tipo'] == 'RSS':
                 processar_rss(fonte, cidades, data_limite, cursor, db)
             elif fonte['tipo'] == 'HTML':
-                processar_html_heuristico(fonte, cursor, db)
+                processar_html_heuristico(fonte, cidades, cursor, db)
         except Exception as e:
             pass
             
@@ -60,26 +73,21 @@ def processar_rss(fonte, cidades, data_limite, cursor, db):
         if data_pub < data_limite: continue
 
         texto_limpo = BeautifulSoup(entry.description, "html.parser").get_text(strip=True)
-        texto_completo = f"{entry.title} {texto_limpo}".lower()
+        texto_completo = f"{entry.title} {texto_limpo}"
 
-        # Validação rigorosa do Fallback: Se for G1, bloqueia a menos que haja match absoluto do município
-        if 'g1' in (fonte['nome'] or '').lower():
-            citou_cidade = False
-            for cidade in cidades:
-                if re.search(fr'\b{re.escape(cidade)}\b', texto_completo):
-                    citou_cidade = True
-                    break
-            if not citou_cidade:
-                continue 
+        cidade_mencionada = extrair_cidade(texto_completo, cidades)
+
+        if 'g1' in (fonte['nome'] or '').lower() and not cidade_mencionada:
+            continue 
 
         resumo_curto = texto_limpo[:200] + '...' if len(texto_limpo) > 200 else texto_limpo
         categoria = classificar_categoria(texto_completo)
 
-        sql = "INSERT IGNORE INTO noticias (fonte_id, titulo, resumo, url_original, categoria, data_publicacao) VALUES (%s, %s, %s, %s, %s, %s)"
-        cursor.execute(sql, (fonte['id'], entry.title, resumo_curto, entry.link, categoria, data_pub))
+        sql = "INSERT IGNORE INTO noticias (fonte_id, cidade_mencionada, titulo, resumo, url_original, categoria, data_publicacao) VALUES (%s, %s, %s, %s, %s, %s, %s)"
+        cursor.execute(sql, (fonte['id'], cidade_mencionada, entry.title, resumo_curto, entry.link, categoria, data_pub))
         db.commit()
 
-def processar_html_heuristico(fonte, cursor, db):
+def processar_html_heuristico(fonte, cidades, cursor, db):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     try:
         response = requests.get(fonte['url'], headers=headers, timeout=15)
@@ -101,9 +109,11 @@ def processar_html_heuristico(fonte, cursor, db):
                     link = dominio_base + '/' + link.lstrip('/')
                     
                 categoria = classificar_categoria(titulo)
+                cidade_mencionada = extrair_cidade(titulo, cidades)
+
                 try:
-                    sql = "INSERT IGNORE INTO noticias (fonte_id, titulo, resumo, url_original, categoria) VALUES (%s, %s, %s, %s, %s)"
-                    cursor.execute(sql, (fonte['id'], titulo, "Acesse para ler na íntegra no portal oficial.", link, categoria))
+                    sql = "INSERT IGNORE INTO noticias (fonte_id, cidade_mencionada, titulo, resumo, url_original, categoria) VALUES (%s, %s, %s, %s, %s, %s)"
+                    cursor.execute(sql, (fonte['id'], cidade_mencionada, titulo, "Acesse para ler na íntegra no portal oficial.", link, categoria))
                     db.commit()
                     noticias_salvas += 1
                 except: pass

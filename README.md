@@ -1,6 +1,6 @@
 # 🚆 Conecta Alta Paulista
 
-O **Conecta Alta Paulista** é um agregador automático de notícias focado exclusivamente na região da Alta Paulista. O projeto tem como objetivo rastrear, categorizar e centralizar informações publicadas ao longo de todo o tronco férreo paulista, contemplando os municípios desde **Garça até Panorama**.
+O **Conecta Alta Paulista** é um agregador automático de notícias focado exclusivamente na região da Alta Paulista. O projeto tem como objetivo rastrear, categorizar e centralizar informações e notícias publicadas pelas cidades limítrofes que percorrem todo o tronco férreo da Alta Paulista, contemplando os municípios entre Garça e Panorama.
 
 ## 🚀 Como executar o projeto localmente
 
@@ -8,7 +8,7 @@ Para rodar o projeto do zero, você precisará configurar os ambientes do Backen
 
 ### 1. Configuração do Backend e Banco de Dados (Terminal 1)
 
-Antes de iniciar, certifique-se de ter o MySQL instalado e o Python 3.12+ configurado.
+Certifique-se de ter o MySQL instalado e o Python 3.12+ configurado.
 
 1.  Navegue até a pasta do backend:
     ```bash
@@ -31,11 +31,12 @@ Antes de iniciar, certifique-se de ter o MySQL instalado e o Python 3.12+ config
     ```bash
     python -m pip install -r requirements.txt
     ```
+    *(Nota: No Linux Mint/Ubuntu, caso encontre erro de ambiente gerenciado externamente, utilize a flag `--break-system-packages`).*
 5.  Inicialize o banco e as fontes:
     ```bash
     python popular_banco.py
     ```
-6.  Inicie a API:
+6.  Inicie a API e a rotina de raspagem (rodará na porta 5001):
     ```bash
     python app.py
     ```
@@ -48,15 +49,16 @@ Com o backend rodando, abra uma nova aba do terminal.
     ```bash
     cd frontend
     ```
-2.  Instale os pacotes do Node:
+2.  Instale as dependências do projeto:
     ```bash
     npm install
     ```
+    *(Nota: Ignore avisos de vulnerabilidade do `npm audit`. Não utilize `npm audit fix --force`, pois isso pode corromper a árvore de dependências do Next.js/React).*
 3.  Inicie o servidor de desenvolvimento:
     ```bash
     npm run dev
     ```
-4.  Acesse: **http://localhost:3000**
+4.  Acesse o sistema no navegador: **http://localhost:3000**
 
 ---
 

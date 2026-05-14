@@ -54,6 +54,7 @@ def init_db():
         """CREATE TABLE IF NOT EXISTS noticias (
             id INT AUTO_INCREMENT PRIMARY KEY,
             fonte_id INT, 
+            cidade_mencionada VARCHAR(100) DEFAULT NULL,
             titulo VARCHAR(255), 
             resumo TEXT,
             url_original VARCHAR(255) UNIQUE, 
@@ -64,7 +65,13 @@ def init_db():
     ]
     for sql in tabelas:
         cursor.execute(sql)
+        
+    # Tenta atualizar o banco antigo automaticamente para não quebrar seu sistema
+    try:
+        cursor.execute("ALTER TABLE noticias ADD COLUMN cidade_mencionada VARCHAR(100) AFTER fonte_id")
+    except Exception:
+        pass # Se der erro, é porque a coluna já existe, então seguimos em frente!
+        
     conn.commit()
     cursor.close()
     conn.close()
-    
