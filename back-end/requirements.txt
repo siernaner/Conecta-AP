@@ -1,0 +1,9 @@
+flask
+flask-cors
+mysql-connector-python
+bcrypt
+pyjwt
+feedparser
+beautifulsoup4
+requests
+python-dotenv
