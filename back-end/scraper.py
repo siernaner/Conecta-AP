@@ -9,85 +9,103 @@ from database import get_connection
 
 def classificar_categoria(texto):
     texto = texto.lower()
-    if re.search(r'\b(polícia|preso|acidente|roubo|bombeiros|pm|furto|crime|investigação|morte|assassinato|tráfico|drogas|colisão|capotar)\b', texto): return 'Segurança Pública'
-    if re.search(r'\b(futebol|campeonato|torneio|time|atleta|jogo|esporte|copa|medalha)\b', texto): return 'Esporte'
-    if re.search(r'\b(prefeitura|câmara|vereadores|imposto|obras|projeto|licitação|prefeito|governo|iptu|política)\b', texto): return 'Cidadania'
+    if re.search(r'\b(alagamento|chuva|granizo|temporal|clima|estragos|defesa civil|deslizamento|enchente)\b', texto): return 'Cidadania'
+    if re.search(r'\b(polícia|preso|acidente|roubo|bombeiros|furto|crime|investigação|homicídio|assassinato|tráfico|drogas|colisão|capotar)\b', texto): return 'Segurança Pública'
+    if re.search(r'\b(futebol|campeonato|torneio|atleta|esporte|copa|medalha|olimpíadas|brasileirão)\b', texto): return 'Esporte'
+    if re.search(r'\b(prefeitura|câmara|vereadores|imposto|obras|licitação|prefeito|governo|iptu|política)\b', texto): return 'Cidadania'
     if re.search(r'\b(saúde|hospital|médico|dengue|vacina|ubs|paciente|remédio|campanha|doença|vírus|leishmaniose)\b', texto): return 'Saúde'
     if re.search(r'\b(educação|escola|aluno|professor|ensino|faculdade|creche|universidade|unesp|fatec|etec)\b', texto): return 'Educação'
-    if re.search(r'\b(festa|show|evento|festival|programação|ingresso|exposição|cultura|música)\b', texto): return 'Eventos'
+    if re.search(r'\b(festa|show|evento|festival|ingresso|exposição|cultura|música)\b', texto): return 'Eventos'
     if re.search(r'\b(agronegócio|safra|soja|rural|colheita|gado|chuva|plantio|fazenda|agricultura)\b', texto): return 'Agronegócio'
-    return 'Notícias Gerais'
+    return 'Geral'
 
-def extrair_cidade(texto, cidades_lista):
-    encontradas = set()
-    texto_lower = texto.lower()
+def extrair_cidade(titulo, corpo, cidades_lista):
+    texto_titulo = titulo.lower()
+    encontradas_titulo = set()
+    
     for cidade in cidades_lista:
-        # Busca a cidade como uma palavra inteira para evitar falsos positivos
-        if re.search(fr'\b{re.escape(cidade)}\b', texto_lower):
-            encontradas.add(cidade.title())
+        if re.search(fr'\b{re.escape(cidade.lower())}\b', texto_titulo):
+            encontradas_titulo.add(cidade)
             
-    if len(encontradas) == 1:
-        return list(encontradas)[0] # Achou uma exata
-    elif len(encontradas) > 1:
-        return 'Região' # Achou mais de uma, classifica como Região
-    return None # Não achou nenhuma
-
-def varredura_inteligente():
-    db = get_connection()
-    if not db: return
-    cursor = db.cursor(dictionary=True)
+    if len(encontradas_titulo) == 1:
+        return list(encontradas_titulo)[0]
+        
+    texto_corpo = corpo.lower() if corpo else ""
+    texto_completo = f"{texto_titulo} {texto_corpo}"
+    encontradas_texto = set()
     
-    cursor.execute("SELECT nome FROM cidades WHERE ativa = True")
-    cidades = [row['nome'].lower() for row in cursor.fetchall()]
+    for cidade in cidades_lista:
+        if re.search(fr'\b{re.escape(cidade.lower())}\b', texto_completo):
+            encontradas_texto.add(cidade)
+            
+    if len(encontradas_texto) == 1:
+        return list(encontradas_texto)[0]
+    elif len(encontradas_texto) > 1:
+        return 'Região Alta Paulista'
+    else:
+        return 'Outras Regiões'
 
-    cursor.execute("SELECT COUNT(*) as total FROM noticias")
-    banco_vazio = cursor.fetchone()['total'] == 0
-    limite_dias = 7 if banco_vazio else 1
-    data_limite = datetime.datetime.now() - datetime.timedelta(days=limite_dias)
-
-    cursor.execute("SELECT * FROM fontes")
-    fontes = cursor.fetchall()
-    
-    for fonte in fontes:
-        try:
-            if fonte['tipo'] == 'RSS':
-                processar_rss(fonte, cidades, data_limite, cursor, db)
-            elif fonte['tipo'] == 'HTML':
-                processar_html_heuristico(fonte, cidades, cursor, db)
-        except Exception as e:
+def formatar_data_html(soup):
+    meta_pub = soup.find('meta', property='article:published_time') or soup.find('meta', attrs={'itemprop': 'datePublished'})
+    if meta_pub and meta_pub.get('content'):
+        try: 
+            return re.sub(r'T', ' ', meta_pub['content'][:19])
+        except: 
             pass
+    return None
+
+def processar_resumo(titulo, resumo_bruto):
+    if not resumo_bruto:
+        return "Acesse para ler na íntegra."
+        
+    resumo = re.sub(fr'^{re.escape(titulo)}', '', resumo_bruto, flags=re.IGNORECASE).strip()
+    resumo = re.sub(r'^[\-\|:\s]+', '', resumo)
+    
+    if len(resumo) > 160:
+        resumo = resumo[:157]
+        resumo = resumo.rsplit(' ', 1)[0] + "..."
+        
+    return resumo if resumo else "Acesse para ler na íntegra."
+
+def buscar_corpo_noticia(url):
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
             
-    cursor.execute("DELETE FROM noticias WHERE data_publicacao < NOW() - INTERVAL 1 MONTH")
-    db.commit()
-    cursor.close()
-    db.close()
+            data_encontrada = formatar_data_html(soup)
+            
+            meta_desc = soup.find('meta', attrs={'name': 'description'}) or soup.find('meta', property='og:description')
+            resumo_oficial = meta_desc['content'] if meta_desc and meta_desc.get('content') else ""
+            
+            for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside', 'noscript']):
+                tag.decompose()
+                
+            for tag in soup.find_all(attrs={'class': re.compile(r'menu|nav|footer|sidebar|share|social|comments|cookie', re.I)}):
+                tag.decompose()
+            for tag in soup.find_all(attrs={'id': re.compile(r'menu|nav|footer|sidebar|share|social|comments|cookie', re.I)}):
+                tag.decompose()
 
-def processar_rss(fonte, cidades, data_limite, cursor, db):
-    feed = feedparser.parse(fonte['url'])
-    for entry in feed.entries:
-        if hasattr(entry, 'published_parsed') and entry.published_parsed:
-            data_pub = datetime.datetime.fromtimestamp(time.mktime(entry.published_parsed))
-        else:
-            data_pub = datetime.datetime.now()
+            article = soup.find('article') or soup.find('main') or soup.body
+            
+            if not resumo_oficial and article:
+                paragrafos = article.find_all('p')
+                for p in paragrafos:
+                    texto_p = p.get_text(separator=' ', strip=True)
+                    if len(texto_p) > 50:
+                        resumo_oficial = texto_p
+                        break
 
-        if data_pub < data_limite: continue
+            texto_limpo = article.get_text(separator=' ', strip=True) if article else ""
+            texto_limpo = re.sub(r'\s+', ' ', texto_limpo)
+            
+            return texto_limpo, data_encontrada, resumo_oficial
+    except:
+        return "", None, ""
+    return "", None, ""
 
-        texto_limpo = BeautifulSoup(entry.description, "html.parser").get_text(strip=True)
-        texto_completo = f"{entry.title} {texto_limpo}"
-
-        cidade_mencionada = extrair_cidade(texto_completo, cidades)
-
-        if 'g1' in (fonte['nome'] or '').lower() and not cidade_mencionada:
-            continue 
-
-        resumo_curto = texto_limpo[:200] + '...' if len(texto_limpo) > 200 else texto_limpo
-        categoria = classificar_categoria(texto_completo)
-
-        sql = "INSERT IGNORE INTO noticias (fonte_id, cidade_mencionada, titulo, resumo, url_original, categoria, data_publicacao) VALUES (%s, %s, %s, %s, %s, %s, %s)"
-        cursor.execute(sql, (fonte['id'], cidade_mencionada, entry.title, resumo_curto, entry.link, categoria, data_pub))
-        db.commit()
-
-def processar_html_heuristico(fonte, cidades, cursor, db):
+def processar_html(fonte, cidades_lista, cursor, db):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     try:
         response = requests.get(fonte['url'], headers=headers, timeout=15)
@@ -107,23 +125,103 @@ def processar_html_heuristico(fonte, cidades, cursor, db):
                 if not link.startswith('http'):
                     dominio_base = '/'.join(fonte['url'].split('/')[:3])
                     link = dominio_base + '/' + link.lstrip('/')
+                
+                corpo_completo, data_html, resumo_extraiddo = buscar_corpo_noticia(link)
+                cidade_mencionada = extrair_cidade(titulo, corpo_completo, cidades_lista)
                     
-                categoria = classificar_categoria(titulo)
-                cidade_mencionada = extrair_cidade(titulo, cidades)
-
+                categoria = classificar_categoria(f"{titulo} {corpo_completo}")
+                
+                resumo_base = resumo_extraiddo if resumo_extraiddo else corpo_completo
+                resumo = processar_resumo(titulo, resumo_base)
+                
+                data_publicacao = data_html if data_html else datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                data_importacao = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                
                 try:
-                    sql = "INSERT IGNORE INTO noticias (fonte_id, cidade_mencionada, titulo, resumo, url_original, categoria) VALUES (%s, %s, %s, %s, %s, %s)"
-                    cursor.execute(sql, (fonte['id'], cidade_mencionada, titulo, "Acesse para ler na íntegra no portal oficial.", link, categoria))
+                    sql = """INSERT IGNORE INTO noticias 
+                             (fonte_id, cidade_mencionada, titulo, resumo, corpo_completo, url_original, categoria, data_publicacao, data_importacao) 
+                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                    cursor.execute(sql, (fonte['id'], cidade_mencionada, titulo, resumo, corpo_completo, link, categoria, data_publicacao, data_importacao))
                     db.commit()
                     noticias_salvas += 1
-                except: pass
-    except: pass
+                except:
+                    pass
+    except Exception as e:
+        print(f"Erro no processamento HTML da fonte {fonte.get('id')}: {e}")
+
+def processar_rss(fonte, cidades_lista, cursor, db):
+    try:
+        feed = feedparser.parse(fonte['url'])
+        noticias_salvas = 0
+        for entry in feed.entries:
+            if noticias_salvas >= 10: break
+            titulo = entry.title
+            link = entry.link
+            
+            corpo_completo, _, resumo_html = buscar_corpo_noticia(link)
+            cidade_mencionada = extrair_cidade(titulo, corpo_completo, cidades_lista)
+                
+            categoria = classificar_categoria(f"{titulo} {corpo_completo}")
+            
+            descricao_bruta = entry.get('description', '')
+            resumo_limpo = BeautifulSoup(descricao_bruta, "html.parser").get_text(strip=True)
+            resumo_base = resumo_limpo if resumo_limpo else (resumo_html if resumo_html else corpo_completo)
+            resumo = processar_resumo(titulo, resumo_base)
+            
+            data_publicacao = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            if 'published_parsed' in entry and entry.published_parsed:
+                try: 
+                    data_publicacao = time.strftime('%Y-%m-%d %H:%M:%S', entry.published_parsed)
+                except: 
+                    pass
+                
+            data_importacao = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            try:
+                sql = """INSERT IGNORE INTO noticias 
+                         (fonte_id, cidade_mencionada, titulo, resumo, corpo_completo, url_original, categoria, data_publicacao, data_importacao) 
+                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                cursor.execute(sql, (fonte['id'], cidade_mencionada, titulo, resumo, corpo_completo, link, categoria, data_publicacao, data_importacao))
+                db.commit()
+                noticias_salvas += 1
+            except:
+                pass
+    except Exception as e:
+        print(f"Erro no processamento RSS da fonte {fonte.get('id')}: {e}")
+
+def varredura_inteligente():
+    print(f"[{datetime.datetime.now()}] Iniciando varredura de notícias...")
+    db = get_connection()
+    if not db:
+        print("Erro: Não foi possível conectar ao banco de dados")
+        return
+    cursor = db.cursor(dictionary=True)
+    
+    cursor.execute("SELECT nome FROM cidades WHERE ativa = True")
+    cidades_lista = [row['nome'] for row in cursor.fetchall()]
+
+    cursor.execute("SELECT * FROM fontes")
+    fontes = cursor.fetchall()
+    
+    for fonte in fontes:
+        if fonte['tipo'] == 'HTML':
+            processar_html(fonte, cidades_lista, cursor, db)
+        elif fonte['tipo'] == 'RSS':
+            processar_rss(fonte, cidades_lista, cursor, db)
+            
+    cursor.close()
+    db.close()
+    print(f"[{datetime.datetime.now()}] Varredura concluída!")
 
 def loop_automacao():
     while True:
-        varredura_inteligente()
+        try:
+            varredura_inteligente()
+        except Exception as e:
+            print(f"Erro no loop de automação: {e}")
         time.sleep(1800)
 
 def iniciar_robo():
     thread = threading.Thread(target=loop_automacao, daemon=True)
     thread.start()
+    print("Robô de coleta de notícias iniciado!")
