@@ -7,9 +7,15 @@ export default function NavBar() {
     const { user, signOut } = useContext(AuthContext);
     const [isOpen, setIsOpen] = useState(false);
 
+    const footerLinks = [
+        { href: "/sobre", label: "Sobre o Projeto", icon: "bi-info-circle" },
+        { href: "/disclaimer", label: "Aviso Legal", icon: "bi-shield-exclamation" },
+        { href: "/contato", label: "Contato", icon: "bi-envelope" }
+    ];
+
     return (
         <>
-            <nav className="navbar navbar-dark bg-dark shadow-sm py-2">
+            <nav className="navbar navbar-dark bg-dark shadow-sm py-2 fixed-top">
                 <div className="container d-flex align-items-center justify-content-between">
                     <div className="d-flex align-items-center">
                         <button className="btn btn-dark border-0 me-2" onClick={() => setIsOpen(true)}>
@@ -39,6 +45,8 @@ export default function NavBar() {
                     </div>
                 </div>
             </nav>
+
+            <div style={{ height: '56px' }}></div> {/* compensar header fixo */}
 
             <div className={`offcanvas offcanvas-start ${isOpen ? 'show' : ''}`} 
                  style={{visibility: isOpen ? 'visible' : 'hidden', backgroundColor: '#141414', color: 'white', width: '280px'}}>
@@ -71,7 +79,23 @@ export default function NavBar() {
                                         <i className="bi bi-shield-check me-3"></i>Moderação de Notícias
                                     </Link>
                                 </li>
+                                <div className="dropdown-divider my-3" style={{borderTop: '1px solid #444'}}></div>
                             </>
+                        )}
+                        <div className="text-light small fw-bold mb-3 mt-4 text-uppercase">Informações</div>
+                        {footerLinks.map((link, idx) => (
+                            <li key={idx} className="mb-3">
+                                <Link href={link.href} className="text-decoration-none text-light" onClick={() => setIsOpen(false)}>
+                                    <i className={`bi ${link.icon} me-3`}></i>{link.label}
+                                </Link>
+                            </li>
+                        ))}
+                        {user && user.role !== 'admin' && (
+                            <li className="mt-3">
+                                <Link href="/perfil" className="text-decoration-none text-light" onClick={() => setIsOpen(false)}>
+                                    <i className="bi bi-person me-3"></i>Meu Perfil
+                                </Link>
+                            </li>
                         )}
                     </ul>
                 </div>

@@ -7,3 +7,7 @@ feedparser
 beautifulsoup4
 requests
 python-dotenv
+cloudscraper
+google-genai
+selenium
+webdriver-manager

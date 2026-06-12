@@ -22,12 +22,42 @@ export default function Home() {
 
   const [itens_visiveis, setItensVisiveis] = useState(15);
   const observer = useRef();
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  const idsMarcados = useRef(new Set()); // evitar marcar duplicado
 
   const obterIdUsuario = () => {
     if (user && user.id) return user.id;
     return null;
   };
 
+  // Salvar posição de rolagem antes de recarregar
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      sessionStorage.setItem('scrollPosition', window.scrollY);
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
+
+  // Restaurar posição após carregar
+  useEffect(() => {
+    const savedScroll = sessionStorage.getItem('scrollPosition');
+    if (savedScroll) {
+      window.scrollTo(0, parseInt(savedScroll));
+      sessionStorage.removeItem('scrollPosition');
+    }
+  }, []);
+
+  // Mostrar botão de topo
+  useEffect(() => {
+    const handleScroll = () => setShowScrollTop(window.scrollY > 500);
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' });
+
+  // Debounce da busca
   useEffect(() => {
     const timer = setTimeout(() => {
       setBuscaDebounced(busca);
@@ -36,37 +66,57 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [busca]);
 
+  // Carregar notícias
   useEffect(() => {
     const u_id = obterIdUsuario() || '';
-    
     api.get(`/noticias?u_id=${u_id}&t=${Date.now()}`)
       .then(response => {
         const dados = response.data || [];
-        
         const processadas = dados.map(n => ({
             ...n,
             status_leitura: u_id ? n.status_leitura : null 
         }));
-
         setNoticias(processadas);
         setCidadesDisponiveis([...new Set(dados.map(n => n.cidade).filter(Boolean))].sort());
         setTemasDisponiveis([...new Set(dados.map(n => n.categoria || 'Geral'))].sort());
         setCarregandoInicial(false);
-
-        if (u_id && dados.length > 0) {
-            const ids_novas = dados.filter(n => n.status_leitura === 'NOVA').map(n => n.id);
-            if (ids_novas.length > 0) {
-                api.post('/noticias/marcar-vistas', 
-                    { ids: ids_novas, u_id: u_id }, 
-                    { headers: { 'Content-Type': 'application/json' } }
-                ).catch(() => {});
-            }
-        }
       })
-      .catch(() => {
-        setCarregandoInicial(false);
-      });
+      .catch(() => setCarregandoInicial(false));
   }, [user]);
+
+  // Marcar como vista quando o card fica visível por 1 segundo
+  useEffect(() => {
+    if (!user) return;
+    const observerVista = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const id = parseInt(entry.target.dataset.id);
+          if (!idsMarcados.current.has(id)) {
+            const timer = setTimeout(() => {
+              if (entry.isIntersecting) {
+                marcarComoVista(id);
+                idsMarcados.current.add(id);
+              }
+            }, 1000);
+            entry.target.timer = timer;
+          }
+        } else {
+          if (entry.target.timer) clearTimeout(entry.target.timer);
+        }
+      });
+    }, { threshold: 0.5 });
+
+    const cards = document.querySelectorAll('.noticia-card');
+    cards.forEach(card => observerVista.observe(card));
+    return () => observerVista.disconnect();
+  }, [noticias, user]);
+
+  const marcarComoVista = async (id) => {
+    const u_id = obterIdUsuario();
+    if (u_id) {
+      await api.post('/noticias/marcar-vistas', { ids: [id], u_id }).catch(() => {});
+    }
+  };
 
   const aplicar_efeito_carregamento = () => {
     setCarregandoTransicao(true);
@@ -80,28 +130,26 @@ export default function Home() {
   };
 
   const filtrar_por_data = (data_str, filtro) => {
-      if (!filtro) return true;
-      const data_noticia = new Date(data_str);
-      const hoje = new Date();
-      const diff_dias = Math.ceil(Math.abs(hoje - data_noticia) / (1000 * 60 * 60 * 24));
-      if (filtro === 'hoje') return diff_dias <= 1;
-      if (filtro === '3_dias') return diff_dias <= 3;
-      if (filtro === '7_dias') return diff_dias <= 7;
-      return true;
+    if (!filtro) return true;
+    const data_noticia = new Date(data_str);
+    const hoje = new Date();
+    const diff_dias = Math.ceil(Math.abs(hoje - data_noticia) / (1000 * 60 * 60 * 24));
+    if (filtro === 'hoje') return diff_dias <= 1;
+    if (filtro === '3_dias') return diff_dias <= 3;
+    if (filtro === '7_dias') return diff_dias <= 7;
+    return true;
   };
 
   const noticias_filtradas = noticias.filter(n => {
-      const match_cidade = cidade_selecionada ? n.cidade === cidade_selecionada : true;
-      const match_tema = tema_selecionado ? (n.categoria || 'Geral') === tema_selecionado : true;
-      const match_data = filtrar_por_data(n.data_publicacao, data_selecionada);
-      
-      const termo = busca_debounced.toLowerCase();
-      const match_busca = termo ? (
-          (n.titulo && n.titulo.toLowerCase().includes(termo)) || 
-          (n.resumo && n.resumo.toLowerCase().includes(termo))
-      ) : true;
-
-      return match_cidade && match_tema && match_data && match_busca;
+    const match_cidade = cidade_selecionada ? n.cidade === cidade_selecionada : true;
+    const match_tema = tema_selecionado ? (n.categoria || 'Geral') === tema_selecionado : true;
+    const match_data = filtrar_por_data(n.data_publicacao, data_selecionada);
+    const termo = busca_debounced.toLowerCase();
+    const match_busca = termo ? (
+      (n.titulo && n.titulo.toLowerCase().includes(termo)) || 
+      (n.resumo && n.resumo.toLowerCase().includes(termo))
+    ) : true;
+    return match_cidade && match_tema && match_data && match_busca;
   });
 
   const itens_exibidos = noticias_filtradas.slice(0, itens_visiveis);
@@ -109,7 +157,6 @@ export default function Home() {
   const lastElementRef = (node) => {
     if (carregando_inicial || carregando_transicao || carregando_mais) return;
     if (observer.current) observer.current.disconnect();
-    
     observer.current = new IntersectionObserver(entries => {
       if (entries[0].isIntersecting && itens_visiveis < noticias_filtradas.length) {
         setCarregandoMais(true);
@@ -119,19 +166,15 @@ export default function Home() {
         }, 500);
       }
     });
-    
     if (node) observer.current.observe(node);
   };
 
   const handle_abrir_noticia = (id, url) => {
-      const u_id = obterIdUsuario();
-      if (u_id) {
-          api.post('/noticias/marcar-aberta', 
-              { id, u_id: u_id },
-              { headers: { 'Content-Type': 'application/json' } }
-          ).catch(() => {});
-      }
-      window.open(url, '_blank', 'noopener,noreferrer');
+    const u_id = obterIdUsuario();
+    if (u_id) {
+      api.post('/noticias/marcar-aberta', { id, u_id }).catch(() => {});
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -139,20 +182,12 @@ export default function Home() {
       <div className="card shadow-sm border-0 mb-4 bg-white">
           <div className="card-body p-4">
               <h5 className="fw-bold mb-3"><i className="bi bi-funnel-fill text-primary me-2"></i>Filtros e Busca</h5>
-              
               <div className="mb-3">
                   <div className="input-group shadow-sm">
                       <span className="input-group-text bg-white border-end-0 text-muted"><i className="bi bi-search"></i></span>
-                      <input 
-                          type="text" 
-                          className="form-control border-start-0 ps-0" 
-                          placeholder="Pesquisar por palavras-chave (ex: vacina, futebol, política)..." 
-                          value={busca}
-                          onChange={(e) => setBusca(e.target.value)}
-                      />
+                      <input type="text" className="form-control border-start-0 ps-0" placeholder="Pesquisar..." value={busca} onChange={(e) => setBusca(e.target.value)} />
                   </div>
               </div>
-
               <div className="row g-3">
                   <div className="col-md-4">
                       <select className="form-select" value={cidade_selecionada} onChange={(e) => handle_filtro_change(setCidadeSelecionada, e.target.value)}>
@@ -180,104 +215,55 @@ export default function Home() {
 
       <div className="d-flex justify-content-between align-items-center mb-4">
           <h2 className="fw-bold m-0">Feed Regional</h2>
-          {noticias_filtradas.length > 0 && (
-              <span className="badge bg-secondary">{noticias_filtradas.length} resultados</span>
-          )}
+          {noticias_filtradas.length > 0 && <span className="badge bg-secondary">{noticias_filtradas.length} resultados</span>}
       </div>
 
       {carregando_inicial || carregando_transicao ? (
-        <div className="text-center py-5">
-            <div className="spinner-border text-primary" role="status"></div>
-            <p className="text-muted mt-2 small">Atualizando feed...</p>
-        </div>
+        <div className="text-center py-5"><div className="spinner-border text-primary"></div><p className="text-muted mt-2">Carregando...</p></div>
       ) : itens_exibidos.length === 0 ? (
-        <div className="alert alert-info text-center">Nenhum dado encontrado para os filtros aplicados.</div>
+        <div className="alert alert-info text-center">Nenhuma notícia encontrada.</div>
       ) : (
         <>
-            <div className="row g-4">
-              {itens_exibidos.map((noticia, index) => (
-                <div 
-                    key={noticia.id} 
-                    className="col-md-6 col-lg-4"
-                    ref={index === itens_exibidos.length - 1 ? lastElementRef : null}
-                >
-                  <div className="card h-100 shadow-sm border-0 border-top border-primary border-3 d-flex flex-column">
-                    <div className="card-body d-flex flex-column pb-2">
-                      <div className="mb-2 d-flex gap-2 align-items-center">
-                          <span className="badge bg-primary-subtle text-primary border border-primary-subtle">{noticia.categoria || 'Geral'}</span>
-                          
-                          {obterIdUsuario() && noticia.status_leitura === 'NOVA' && (
-                              <span className="badge bg-success">NOVA</span>
-                          )}
-                          {obterIdUsuario() && noticia.status_leitura === 'VISTA' && (
-                              <span className="badge" style={{ backgroundColor: '#c8e6c9', color: '#1b5e20' }}>VISTA</span>
-                          )}
-                          {obterIdUsuario() && noticia.status_leitura === 'ABERTA' && (
-                              <span className="badge bg-secondary text-white">ABERTA</span>
-                          )}
-                      </div>
-                      
-                      <h5 className="card-title fw-bold" style={{ 
-                          fontSize: '1rem', 
-                          lineHeight: '1.4',
-                          minHeight: '4.2rem',
-                          display: '-webkit-box', 
-                          WebkitLineClamp: '3', 
-                          WebkitBoxOrient: 'vertical', 
-                          overflow: 'hidden'
-                      }}>
-                          {noticia.titulo}
-                      </h5>
-                      
-                      <p className="card-text text-muted small mb-0 mt-2" style={{ 
-                          display: '-webkit-box', 
-                          WebkitLineClamp: '3', 
-                          WebkitBoxOrient: 'vertical', 
-                          overflow: 'hidden',
-                          minHeight: '3.8rem'
-                      }}>
-                          {noticia.resumo}
-                      </p>
+          <div className="row g-4">
+            {itens_exibidos.map((noticia, index) => (
+              <div key={noticia.id} className="col-md-6 col-lg-4 noticia-card" data-id={noticia.id} ref={index === itens_exibidos.length - 1 ? lastElementRef : null}>
+                <div className="card h-100 shadow-sm border-0 border-top border-primary border-3">
+                  <div className="card-body d-flex flex-column pb-2">
+                    <div className="mb-2 d-flex gap-2 align-items-center">
+                      <span className="badge bg-primary-subtle text-primary border border-primary-subtle">{noticia.categoria || 'Geral'}</span>
+                      {obterIdUsuario() && noticia.status_leitura === 'NOVA' && <span className="badge bg-success">NOVA</span>}
+                      {obterIdUsuario() && noticia.status_leitura === 'VISTA' && <span className="badge" style={{ backgroundColor: '#c8e6c9', color: '#1b5e20' }}>VISTA</span>}
+                      {obterIdUsuario() && noticia.status_leitura === 'ABERTA' && <span className="badge bg-secondary text-white">ABERTA</span>}
                     </div>
-                    
-                    <div className="card-footer bg-white border-top pt-3 pb-3 mt-auto">
-                      <div className="d-flex justify-content-between align-items-end">
-                          <div className="d-flex flex-column gap-1 text-start">
-                              <small className="text-dark fw-bold" style={{ fontSize: '0.75rem' }}>
-                                  <i className="bi bi-calendar3 me-1"></i>
-                                  Publicado: {new Date(noticia.data_publicacao).toLocaleDateString('pt-BR')}
-                              </small>
-                              <small className="text-dark fw-bold" style={{ fontSize: '0.75rem' }}>
-                                  <i className="bi bi-clock-history me-1"></i>
-                                  Importado: {new Date(noticia.data_importacao || noticia.data_publicacao).toLocaleDateString('pt-BR')}
-                              </small>
-                              <div className="mt-1">
-                                  <span className="badge bg-info-subtle text-info-emphasis border border-info-subtle" style={{ fontSize: '0.7rem' }}>
-                                      <i className="bi bi-geo-alt-fill me-1"></i>{noticia.cidade || 'Região'}
-                                  </span>
-                              </div>
-                              <small className="text-muted fst-italic mt-1" style={{ fontSize: '0.7rem' }}>
-                                  <strong>Fonte:</strong> {noticia.fonte_nome || 'Portal de Notícias'}
-                              </small>
-                          </div>
-                          
-                          <button onClick={() => handle_abrir_noticia(noticia.id, noticia.url_original)} className="btn btn-outline-primary btn-sm px-3 rounded-pill">
-                            Ver Matéria Completa <i className="bi bi-arrow-up-right small ms-1"></i>
-                          </button>
+                    <h5 className="card-title fw-bold" style={{ fontSize: '1rem', lineHeight: '1.4', minHeight: '4.2rem', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                      {noticia.titulo}
+                    </h5>
+                    <p className="card-text text-muted small mb-0 mt-2" style={{ WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', minHeight: '3.8rem' }}>
+                      {noticia.resumo}
+                    </p>
+                  </div>
+                  <div className="card-footer bg-white border-top pt-3 pb-3">
+                    <div className="d-flex justify-content-between align-items-end">
+                      <div className="d-flex flex-column gap-1">
+                        <small className="text-dark fw-bold"><i className="bi bi-calendar3 me-1"></i>Publicado: {new Date(noticia.data_publicacao).toLocaleDateString('pt-BR')}</small>
+                        <small className="text-dark fw-bold"><i className="bi bi-clock-history me-1"></i>Importado: {new Date(noticia.data_importacao || noticia.data_publicacao).toLocaleDateString('pt-BR')}</small>
+                        <div><span className="badge bg-info-subtle text-info-emphasis border border-info-subtle"><i className="bi bi-geo-alt-fill me-1"></i>{noticia.cidade || 'Região'}</span></div>
+                        <small className="text-muted fst-italic"><strong>Fonte:</strong> {noticia.fonte_nome || 'Portal'}</small>
                       </div>
+                      <button onClick={() => handle_abrir_noticia(noticia.id, noticia.url_original)} className="btn btn-outline-primary btn-sm px-3 rounded-pill">Ver Matéria <i className="bi bi-arrow-up-right small ms-1"></i></button>
                     </div>
                   </div>
                 </div>
-              ))}
-            </div>
-
-            {carregando_mais && (
-                <div className="text-center mt-4 mb-2">
-                    <div className="spinner-border text-primary spinner-border-sm" role="status"></div>
-                    <span className="ms-2 text-muted small">Carregando mais notícias...</span>
-                </div>
-            )}
+              </div>
+            ))}
+          </div>
+          {carregando_mais && <div className="text-center mt-4"><div className="spinner-border text-primary spinner-border-sm"></div><span className="ms-2 text-muted">Carregando...</span></div>}
         </>
+      )}
+      {showScrollTop && (
+        <button onClick={scrollToTop} className="btn btn-primary rounded-circle position-fixed" style={{ bottom: '20px', right: '20px', zIndex: 1000, width: '50px', height: '50px' }}>
+          <i className="bi bi-arrow-up"></i>
+        </button>
       )}
     </div>
   );

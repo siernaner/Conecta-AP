@@ -7,17 +7,26 @@ def gerar_hash(senha):
     return bcrypt.hashpw(senha.encode('utf-8'), salt).decode('utf-8')
 
 def formatar_url_cidade(nome):
-    sem_acentos = ''.join(c for c in unicodedata.normalize('NFD', nome) if unicodedata.category(c) != 'Mn')
-    formatado = sem_acentos.replace(' ', '').lower()
-    return f"https://www.{formatado}.sp.gov.br"
+    especiais = {
+        'Arco-Íris': 'arcoiris',
+        'São João do Pau d\'Alho': 'paudalho',
+    }
+    if nome in especiais:
+        slug = especiais[nome]
+    else:
+        sem_acentos = ''.join(c for c in unicodedata.normalize('NFD', nome) if unicodedata.category(c) != 'Mn')
+        slug = sem_acentos.replace(' ', '').lower()
+        slug = slug.replace('-', '')
+    return f"https://www.{slug}.sp.gov.br"
 
 def popular_sistema():
     init_db() 
     db = get_connection()
-    if not db: return
+    if not db: 
+        print("Erro ao conectar ao banco")
+        return
     cursor = db.cursor()
 
-    # Cidades mapeadas da matriz geográfica
     cidades = [
         'Adamantina', 'Arco-Íris', 'Bastos', 'Dracena', 'Flórida Paulista', 
         'Garça', 'Herculândia', 'Iacri', 'Irapuru', 'Junqueirópolis', 
@@ -28,18 +37,16 @@ def popular_sistema():
         "São João do Pau d'Alho", 'Tupã', 'Tupi Paulista', 'Vera Cruz'
     ]
     
+    # Insere cidades e suas prefeituras (como fontes com cidade_id)
     for cidade in cidades:
         cursor.execute("INSERT IGNORE INTO cidades (nome, ativa) VALUES (%s, True)", (cidade,))
         cursor.execute("SELECT id FROM cidades WHERE nome = %s", (cidade,))
         cidade_id = cursor.fetchone()[0]
-        
         url_prefeitura = formatar_url_cidade(cidade)
-        cursor.execute("SELECT id FROM fontes WHERE url = %s", (url_prefeitura,))
-        if not cursor.fetchone():
-            cursor.execute("INSERT INTO fontes (cidade_id, nome, url, tipo) VALUES (%s, %s, %s, %s)", 
-                           (cidade_id, f"Prefeitura de {cidade}", url_prefeitura, 'HTML'))
+        cursor.execute("INSERT IGNORE INTO fontes (cidade_id, nome, url, tipo) VALUES (%s, %s, %s, %s)", 
+                       (cidade_id, f"Prefeitura de {cidade}", url_prefeitura, 'HTML'))
 
-    # Inserção de Portais Secundários e de Densidade
+    # Portais regionais (sem incluir as prefeituras novamente)
     portais_regionais = [
         ('Marília Notícia', 'https://marilianoticia.com.br/', 'HTML'),
         ('Garça em Foco', 'https://garcaemfoco.com.br/', 'HTML'),
@@ -53,13 +60,12 @@ def popular_sistema():
     ]
 
     for nome_fonte, url, tipo in portais_regionais:
-        cursor.execute("SELECT id FROM fontes WHERE url = %s", (url,))
-        if not cursor.fetchone():
-            cursor.execute("INSERT INTO fontes (nome, url, tipo) VALUES (%s, %s, %s)", (nome_fonte, url, tipo))
+        cursor.execute("INSERT IGNORE INTO fontes (nome, url, tipo) VALUES (%s, %s, %s)", (nome_fonte, url, tipo))
 
+    # Usuários
     usuarios = [
-        {"nome": "cidadecoracao", "email": "master@conecta.com.br", "senha": "asdf1234", "role": "admin"},
-        {"nome": "userpompeia", "email": "user@conecta.com.br", "senha": "0987654e", "role": "user"}
+        {"nome": "cidadecoracao", "email": "master@conecta.com.br", "senha": "Asdf1234!", "role": "admin"},
+        {"nome": "userpompeia", "email": "user@conecta.com.br", "senha": "0987654Ee", "role": "user"}
     ]
 
     for user in usuarios:
@@ -71,6 +77,7 @@ def popular_sistema():
     db.commit()
     cursor.close()
     db.close()
+    print("Banco populado com sucesso!")
 
 if __name__ == "__main__":
     popular_sistema()

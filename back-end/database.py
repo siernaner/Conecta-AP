@@ -54,7 +54,7 @@ def init_db():
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 cidade_id INT,
                 nome VARCHAR(100), 
-                url VARCHAR(255),
+                url VARCHAR(255) UNIQUE,
                 tipo ENUM('RSS', 'HTML') DEFAULT 'RSS',
                 FOREIGN KEY (cidade_id) REFERENCES cidades(id)
             )""",

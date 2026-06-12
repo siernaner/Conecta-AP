@@ -7,7 +7,7 @@ import Link from 'next/link';
 export default function RootLayout({ children }) {
   return (
     <html lang="pt-BR">
-      <body className="bg-light d-flex flex-column min-vh-100">
+      <body className="bg-light d-flex flex-column min-vh-100" style={{ paddingTop: '56px' }}>
         <AuthProvider>
            <NavBar />
            <main className="container py-4 flex-grow-1">
@@ -16,14 +16,14 @@ export default function RootLayout({ children }) {
            <footer className="bg-dark text-light py-4 mt-auto">
                 <div className="container text-center">
                     <div className="d-flex justify-content-center gap-4 mb-3">
-                        <Link href="/sobre" className="text-light text-decoration-none small hover-primary">Sobre o Projeto</Link>
-                        <Link href="/disclaimer" className="text-light text-decoration-none small hover-primary">Aviso Legal</Link>
-                        <Link href="/contato" className="text-light text-decoration-none small hover-primary">Contato</Link>
+                        <Link href="/sobre" className="text-light text-decoration-none" style={{ fontSize: '1rem' }}>Sobre o Projeto</Link>
+                        <Link href="/disclaimer" className="text-light text-decoration-none" style={{ fontSize: '1rem' }}>Aviso Legal</Link>
+                        <Link href="/contato" className="text-light text-decoration-none" style={{ fontSize: '1rem' }}>Contato</Link>
                     </div>
-                    <p className="small mb-1 text-muted" style={{ fontSize: '0.75rem' }}>
+                    <p className="mb-1 text-muted" style={{ fontSize: '0.9rem' }}>
                         Este sistema possui fins estritamente educativos e acadêmicos, sem fins lucrativos.
                     </p>
-                    <p className="small mb-0 text-muted" style={{ fontSize: '0.7rem' }}>
+                    <p className="mb-0 text-muted" style={{ fontSize: '0.8rem' }}>
                         As notícias têm origens externas e são de responsabilidade dos autores originais.
                     </p>
                 </div>

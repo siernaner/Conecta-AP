@@ -10,17 +10,19 @@ from functools import wraps
 from database import init_db, get_connection
 from scraper import iniciar_robo
 from dotenv import load_dotenv
+from google import genai
 
 load_dotenv()
+
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
 
+# ==================== DECORATORS ====================
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         if request.method == 'OPTIONS':
             return jsonify({}), 200
-            
         token = request.headers.get('Authorization')
         if not token:
             return jsonify({'erro': 'unauthorized'}), 401
@@ -39,52 +41,44 @@ def admin_required(f):
     def decorated(*args, **kwargs):
         if request.method == 'OPTIONS':
             return jsonify({}), 200
-            
         if request.usuario_logado.get('role') != 'admin':
             return jsonify({'erro': 'Acesso negado'}), 403
         return f(*args, **kwargs)
     return decorated
 
+# ==================== ROTAS PÚBLICAS ====================
 @app.route('/login', methods=['POST', 'OPTIONS'])
 def login():
-    if request.method == 'OPTIONS': 
+    if request.method == 'OPTIONS':
         return jsonify({}), 200
-    
     dados = request.get_json(force=True, silent=True) or {}
     email = dados.get('email')
     senha = dados.get('senha')
-    
     if not email or not senha:
         return jsonify({'erro': 'email_e_senha_obrigatorios'}), 400
-    
     db = get_connection()
     cursor = db.cursor(dictionary=True)
-    
     cursor.execute("SELECT * FROM usuarios WHERE email = %s", (email,))
     u = cursor.fetchone()
-    
     if u and bcrypt.checkpw(senha.encode('utf-8'), u['senha_hash'].encode('utf-8')):
         if not u.get('ativo', True):
             cursor.close()
             db.close()
             return jsonify({'erro': 'conta_bloqueada'}), 403
-            
         token = jwt.encode({
-            'id': u['id'], 
-            'role': u['role'], 
-            'nome': u['nome'], 
+            'id': u['id'],
+            'role': u['role'],
+            'nome': u['nome'],
             'exp': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)
         }, os.getenv('JWT_SECRET'), algorithm='HS256')
-        
         cursor.close()
         db.close()
         return jsonify({
-            'token': token, 
-            'role': u['role'], 
-            'nome': u['nome'], 
+            'token': token,
+            'role': u['role'],
+            'nome': u['nome'],
             'id': u['id']
         })
-    
     cursor.close()
     db.close()
     return jsonify({'erro': 'credenciais_invalidas'}), 401
@@ -93,27 +87,19 @@ def login():
 def registrar():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
-    
     dados = request.get_json(force=True, silent=True) or {}
     nome = dados.get('nome')
     email = dados.get('email')
     senha = dados.get('senha')
-    
     if not nome or not email or not senha:
         return jsonify({'erro': 'campos_obrigatorios'}), 400
-    
-    # Validação de email
     if not re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
         return jsonify({'erro': 'email_invalido'}), 400
-    
-    # Validação de senha (8 chars, maiúscula, minúscula, número)
     if not re.match(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$', senha):
         return jsonify({'erro': 'senha_fraca'}), 400
-    
     db = get_connection()
     cursor = db.cursor()
     senha_hash = bcrypt.hashpw(senha.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-    
     try:
         cursor.execute(
             "INSERT INTO usuarios (nome, email, senha_hash, role) VALUES (%s, %s, %s, 'user')",
@@ -127,31 +113,26 @@ def registrar():
         cursor.close()
         db.close()
         return jsonify({'erro': 'email_existente'}), 409
-    except Exception as e:
+    except Exception:
         cursor.close()
         db.close()
         return jsonify({'erro': 'erro_interno'}), 500
 
 @app.route('/noticias', methods=['GET', 'OPTIONS'])
 def get_noticias():
-    if request.method == 'OPTIONS': 
+    if request.method == 'OPTIONS':
         return jsonify({}), 200
-    
     search = request.args.get('search', '')
     usuario_id = request.args.get('u_id')
     if usuario_id == 'undefined' or usuario_id == '':
         usuario_id = None
-
     db = get_connection()
     cursor = db.cursor(dictionary=True)
-    
     params = []
     query_where = "WHERE n.cidade_mencionada IS NOT NULL AND COALESCE(n.oculto, 0) = 0 "
-    
     if search:
         query_where += " AND (n.titulo LIKE %s OR n.resumo LIKE %s OR n.corpo_completo LIKE %s) "
         params.extend([f'%{search}%', f'%{search}%', f'%{search}%'])
-
     if usuario_id:
         sql = f"""
             SELECT n.*, f.nome AS fonte_nome, n.cidade_mencionada AS cidade,
@@ -172,29 +153,28 @@ def get_noticias():
             ORDER BY n.id DESC LIMIT 300
         """
         params_final = params
-        
     cursor.execute(sql, params_final)
     noticias = cursor.fetchall()
     cursor.close()
     db.close()
     return jsonify(noticias)
 
+# ==================== ROTAS AUTENTICADAS ====================
 @app.route('/noticias/marcar-vistas', methods=['POST', 'OPTIONS'])
 @token_required
 def marcar_vistas():
-    if request.method == 'OPTIONS': 
+    if request.method == 'OPTIONS':
         return jsonify({}), 200
     dados = request.get_json(force=True, silent=True) or {}
     ids = dados.get('ids', [])
     u_id = dados.get('u_id')
-    if not u_id or not ids: 
+    if not u_id or not ids:
         return jsonify({'msg': 'dados invalidos'}), 400
-
     db = get_connection()
     cursor = db.cursor()
     for n_id in ids:
         cursor.execute("""
-            INSERT IGNORE INTO noticias_lidas (usuario_id, noticia_id, status_noticia) 
+            INSERT IGNORE INTO noticias_lidas (usuario_id, noticia_id, status_noticia)
             VALUES (%s, %s, 'VISTA')
         """, (int(u_id), int(n_id)))
     db.commit()
@@ -205,19 +185,18 @@ def marcar_vistas():
 @app.route('/noticias/marcar-aberta', methods=['POST', 'OPTIONS'])
 @token_required
 def marcar_aberta():
-    if request.method == 'OPTIONS': 
+    if request.method == 'OPTIONS':
         return jsonify({}), 200
     dados = request.get_json(force=True, silent=True) or {}
     n_id = dados.get('id')
     u_id = dados.get('u_id')
-    if not u_id or not n_id: 
+    if not u_id or not n_id:
         return jsonify({'msg': 'dados invalidos'}), 400
-
     db = get_connection()
     cursor = db.cursor()
     cursor.execute("""
-        INSERT INTO noticias_lidas (usuario_id, noticia_id, status_noticia, hora_aberta) 
-        VALUES (%s, %s, 'ABERTA', CURRENT_TIMESTAMP) 
+        INSERT INTO noticias_lidas (usuario_id, noticia_id, status_noticia, hora_aberta)
+        VALUES (%s, %s, 'ABERTA', CURRENT_TIMESTAMP)
         ON DUPLICATE KEY UPDATE status_noticia = 'ABERTA', hora_aberta = CURRENT_TIMESTAMP
     """, (int(u_id), int(n_id)))
     db.commit()
@@ -225,6 +204,7 @@ def marcar_aberta():
     db.close()
     return jsonify({'msg': 'ok'})
 
+# ==================== ROTAS ADMIN ====================
 @app.route('/admin/usuarios', methods=['GET', 'OPTIONS'])
 @admin_required
 def admin_get_usuarios():
@@ -266,9 +246,9 @@ def admin_get_cidades_fontes():
     cursor.execute("SELECT * FROM cidades ORDER BY nome")
     cidades = cursor.fetchall()
     cursor.execute("""
-        SELECT f.*, c.nome as cidade_nome 
-        FROM fontes f 
-        LEFT JOIN cidades c ON f.cidade_id = c.id 
+        SELECT f.*, c.nome as cidade_nome
+        FROM fontes f
+        LEFT JOIN cidades c ON f.cidade_id = c.id
         ORDER BY f.id DESC
     """)
     fontes = cursor.fetchall()
@@ -282,7 +262,7 @@ def admin_add_fonte():
     d = request.get_json(force=True, silent=True) or {}
     db = get_connection()
     cursor = db.cursor()
-    cursor.execute("INSERT INTO fontes (nome, url, tipo, cidade_id) VALUES (%s, %s, %s, %s)", 
+    cursor.execute("INSERT INTO fontes (nome, url, tipo, cidade_id) VALUES (%s, %s, %s, %s)",
                    (d.get('nome'), d.get('url'), d.get('tipo'), d.get('cidade_id') if d.get('cidade_id') else None))
     db.commit()
     cursor.close()
@@ -328,6 +308,145 @@ def admin_toggle_noticia(id):
     db.close()
     return jsonify({'msg': 'Visibilidade alterada'})
 
+# ==================== ROTAS DE PERFIL E EDIÇÃO DE USUÁRIOS ====================
+@app.route('/usuario/<int:id>', methods=['GET', 'OPTIONS'])
+@token_required
+def get_usuario(id):
+    """Obtém dados de um usuário. Admin pode acessar qualquer; usuário apenas o próprio."""
+    if request.usuario_logado['role'] != 'admin' and request.usuario_logado['id'] != id:
+        return jsonify({'erro': 'acesso_negado'}), 403
+    db = get_connection()
+    cursor = db.cursor(dictionary=True)
+    cursor.execute("SELECT id, nome, email, role, ativo, data_criacao FROM usuarios WHERE id = %s", (id,))
+    usuario = cursor.fetchone()
+    cursor.close()
+    db.close()
+    if not usuario:
+        return jsonify({'erro': 'usuario_nao_encontrado'}), 404
+    return jsonify(usuario)
+
+@app.route('/usuario/<int:id>', methods=['PUT', 'OPTIONS'])
+@token_required
+def update_usuario(id):
+    """Atualiza nome, email ou senha do usuário. Admin pode atualizar qualquer um; usuário apenas o próprio."""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    if request.usuario_logado['role'] != 'admin' and request.usuario_logado['id'] != id:
+        return jsonify({'erro': 'acesso_negado'}), 403
+    
+    dados = request.get_json(force=True, silent=True) or {}
+    nome = dados.get('nome')
+    email = dados.get('email')
+    senha = dados.get('senha')
+    
+    if email and not re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
+        return jsonify({'erro': 'email_invalido'}), 400
+    if senha and not re.match(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$', senha):
+        return jsonify({'erro': 'senha_fraca'}), 400
+    
+    db = get_connection()
+    cursor = db.cursor()
+    updates = []
+    params = []
+    if nome:
+        updates.append("nome = %s")
+        params.append(nome)
+    if email:
+        updates.append("email = %s")
+        params.append(email)
+    if senha:
+        senha_hash = bcrypt.hashpw(senha.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        updates.append("senha_hash = %s")
+        params.append(senha_hash)
+    
+    if not updates:
+        cursor.close()
+        db.close()
+        return jsonify({'msg': 'nenhuma_alteracao'}), 200
+    
+    params.append(id)
+    sql = f"UPDATE usuarios SET {', '.join(updates)} WHERE id = %s"
+    try:
+        cursor.execute(sql, params)
+        db.commit()
+        cursor.close()
+        db.close()
+        return jsonify({'msg': 'usuario_atualizado'}), 200
+    except mysql.connector.IntegrityError:
+        cursor.close()
+        db.close()
+        return jsonify({'erro': 'email_existente'}), 409
+    except Exception as e:
+        cursor.close()
+        db.close()
+        return jsonify({'erro': 'erro_interno'}), 500
+
+# ==================== ENDPOINT COM IA (GEMINI) ====================
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+if GEMINI_API_KEY:
+    genai_client = genai.Client(api_key=GEMINI_API_KEY)
+    modelo_principal = 'gemini-3.1-flash-lite'
+else:
+    genai_client = None
+    print("Aviso: GEMINI_API_KEY não encontrada. O endpoint /resumir-noticia não funcionará.")
+
+def resumir_com_gemini(titulo, corpo, max_caracteres=150):
+    if not genai_client:
+        return "Erro: API do Gemini não configurada."
+
+    prompt = f"""Você é um redator de resumos para um portal de notícias.
+Gere um resumo curto (máximo {max_caracteres} caracteres) da notícia abaixo.
+
+REGRAS:
+1. NÃO repita o título.
+2. Adicione uma informação EXTRA que não esteja no título (ex: números, causas, consequências, local detalhado, declarações).
+3. Seja direto, em português, sem frases introdutórias.
+4. Responda APENAS com o resumo.
+
+TÍTULO: {titulo}
+
+NOTÍCIA: {corpo}
+
+RESUMO:"""
+
+    try:
+        response = genai_client.models.generate_content(
+            model=modelo_principal,
+            contents=prompt
+        )
+        if response.text:
+            resumo = response.text.strip()
+            resumo = re.sub(r'^["\']|["\']$', '', resumo)
+            if len(resumo) > max_caracteres:
+                corte = resumo[:max_caracteres]
+                ultimo_espaco = corte.rfind(' ')
+                if ultimo_espaco > 0:
+                    resumo = corte[:ultimo_espaco] + '...'
+                else:
+                    resumo = corte + '...'
+            return resumo
+        else:
+            return "Não foi possível gerar resumo."
+    except Exception as e:
+        print(f"Erro ao gerar resumo: {e}")
+        return f"Erro: {str(e)}"
+
+@app.route('/resumir-noticia', methods=['POST'])
+@token_required
+def resumir_noticia():
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    dados = request.get_json(force=True, silent=True) or {}
+    titulo = dados.get('titulo', '')
+    corpo = dados.get('texto', '')
+
+    if not corpo or len(corpo.strip()) < 50:
+        return jsonify({'erro': 'Texto muito curto (mínimo 50 caracteres)'}), 400
+
+    resumo = resumir_com_gemini(titulo, corpo, max_caracteres=150)
+    return jsonify({'resumo': resumo})
+
+# ==================== EXECUÇÃO ====================
 if __name__ == '__main__':
     init_db()
     iniciar_robo()
