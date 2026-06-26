@@ -10,6 +10,8 @@ from database import get_connection
 import cloudscraper
 from dotenv import load_dotenv
 from google import genai
+from unicodedata import normalize
+from collections import Counter
 
 load_dotenv()
 
@@ -17,13 +19,24 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 if GEMINI_API_KEY:
     genai_client = genai.Client(api_key=GEMINI_API_KEY)
-    MODELO_GEMINI = 'gemini-3.1-flash-lite'
+    MODELOS_GEMINI = [
+        'gemini-3.1-flash-lite',
+        'gemini-3.5-flash',
+        'gemini-3-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-2.5-flash',
+        'gemini-2.5-pro',
+        'gemini-3.1-pro',
+        'gemini-2-flash',
+        'gemini-2-flash-lite'
+    ]
 else:
     genai_client = None
+    MODELOS_GEMINI = []
     print("⚠️ GEMINI_API_KEY não encontrada. Resumos IA desabilitados.")
 
-def resumir_com_gemini(titulo, corpo, max_caracteres=150, tentativas=3):
-    """Gera resumo curto com retry em caso de erro."""
+def resumir_com_gemini(titulo, corpo, max_caracteres=150):
+    """Gera resumo curto com fallback automático entre TODOS os modelos."""
     if not genai_client or not corpo or len(corpo) < 50:
         return None
 
@@ -41,11 +54,11 @@ TÍTULO: {titulo}
 NOTÍCIA: {corpo[:3000]}
 
 RESUMO:"""
-    
-    for tentativa in range(tentativas):
+
+    for modelo in MODELOS_GEMINI:
         try:
             response = genai_client.models.generate_content(
-                model=MODELO_GEMINI,
+                model=modelo,
                 contents=prompt
             )
             if response.text:
@@ -59,30 +72,77 @@ RESUMO:"""
                     else:
                         resumo = corte + '...'
                 return resumo
+            # Resposta vazia -> próximo modelo
+            continue
         except Exception as e:
-            print(f"Erro no resumo IA (tentativa {tentativa+1}): {e}")
-            if tentativa < tentativas - 1:
-                time.sleep(2 ** tentativa)  # backoff exponencial: 1, 2, 4 segundos
+            erro_str = str(e)
+            # Se modelo não existe (404) ou quota esgotada (429), pula sem log excessivo
+            if '404' in erro_str or '429' in erro_str or 'RESOURCE_EXHAUSTED' in erro_str:
+                # Log apenas para modelos com cota, para não poluir
+                if modelo in ['gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-3-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash']:
+                    print(f"Modelo {modelo} indisponível (quota/404)")
+                continue
+            # Outros erros: log e continua
+            print(f"Erro com modelo {modelo}: {erro_str[:200]}")
+            continue
+
+    # Se todos falharem
+    print(f"Todos os modelos falharam para: {titulo[:150]}...")
     return None
 
 # ==================== FUNÇÕES AUXILIARES ====================
 def classificar_categoria(texto):
-    texto = texto.lower()
-    if re.search(r'\b(alagamento|chuva|granizo|temporal|clima|estragos|defesa civil|deslizamento|enchente)\b', texto): return 'Clima'
-    if re.search(r'\b(polícia|preso|roubo|bombeiros|furto|crime|investigação|homicídio|assassinato|tráfico|drogas)\b', texto): return 'Segurança Pública'
-    if re.search(r'\b(futebol|campeonato|torneio|atleta|esporte|copa|medalha|olimpíadas|brasileirão)\b', texto): return 'Esporte'
-    if re.search(r'\b(prefeitura|câmara|vereadores|imposto|obras|licitação|prefeito|governo|iptu|política)\b', texto): return 'Cidadania'
-    if re.search(r'\b(saúde|hospital|médico|dengue|vacina|ubs|paciente|remédio|campanha|doença|vírus|leishmaniose)\b', texto): return 'Saúde'
-    if re.search(r'\b(educação|escola|aluno|professor|ensino|faculdade|creche|universidade|unesp|fatec|etec)\b', texto): return 'Educação'
-    if re.search(r'\b(festa|show|evento|festival|ingresso|exposição|música)\b', texto): return 'Eventos'
-    if re.search(r'\b(agronegócio|safra|soja|rural|colheita|gado|plantio|fazenda|agricultura)\b', texto): return 'Agronegócio'
-    if re.search(r'\b(empreendedorismo|tecnologia|inovação|startup|negócios|economia|finanças|investimento|mercado)\b', texto): return 'Negócios'
-    if re.search(r'\b(cultura|tradição|folclore|história|patrimônio|turismo|gastronomia)\b', texto): return 'Cultura'
-    if re.search(r'\b(colisão|trânsito|acidente|rodovia|estrada|congestionamento|viagem|transporte)\b', texto): return 'Trânsito'
-    if re.search(r'\b(ambiente|sustentabilidade|meio ambiente|reciclagem|poluição|desmatamento|conservação)\b', texto): return 'Meio Ambiente'
-    if re.search(r'\b(cotidiano|comportamento|saúde mental|lifestyle|moda|culinária|hobby|viagem)\b', texto): return 'Cotidiano'
-    if re.search(r'\b(ciência|pesquisa|tecnologia|inovação|universidade|descoberta|espaço|saúde)\b', texto): return 'Ciência e Tecnologia'
-    return 'Geral'
+    """
+    Classifica a categoria de uma notícia com base na contagem de palavras-chave.
+    Remove acentos, normaliza o texto e conta ocorrências de cada categoria.
+    Retorna a categoria com maior pontuação ou 'Geral' se nenhuma palavra for encontrada.
+    """
+    # 1. Normalização: remove acentos e converte para minúsculas
+    texto_limpo = normalize('NFKD', texto).encode('ASCII', 'ignore').decode('ASCII').lower()
+    
+    # 2. Dicionário de categorias e suas palavras-chave (já sem acentos)
+    categorias = {
+        'Clima': ['alagamento', 'chuva', 'granizo', 'temporal', 'clima', 'estragos', 'deslizamento', 'enchente'],
+        'Segurança Pública': ['policia', 'preso', 'roubo', 'bombeiros', 'furto', 'crime', 'investigacao', 'homicidio', 'assassinato', 'trafico', 'drogas'],
+        'Esporte': ['futebol', 'campeonato', 'torneio', 'atleta', 'esporte', 'copa', 'medalha', 'olimpiadas', 'brasileirao'],
+        'Cidadania': ['prefeitura', 'camara', 'vereadores', 'imposto', 'obras', 'licitacao', 'prefeito', 'governo', 'iptu', 'politica'],
+        'Saúde': ['saude', 'hospital', 'medico', 'dengue', 'vacina', 'ubs', 'paciente', 'remedio', 'campanha', 'doenca', 'virus', 'leishmaniose'],
+        'Educação': ['educacao', 'escola', 'aluno', 'professor', 'ensino', 'faculdade', 'creche', 'universidade', 'unesp', 'fatec', 'etec'],
+        'Eventos': ['festa', 'show', 'evento', 'festival', 'ingresso', 'exposicao', 'musica'],
+        'Agronegócio': ['agronegocio', 'safra', 'soja', 'rural', 'colheita', 'gado', 'plantio', 'fazenda', 'agricultura'],
+        'Negócios': ['empreendedorismo', 'tecnologia', 'inovacao', 'startup', 'negocios', 'economia', 'financas', 'investimento', 'mercado'],
+        'Cultura': ['cultura', 'tradicao', 'folclore', 'historia', 'patrimonio', 'turismo', 'gastronomia'],
+        'Trânsito': ['colisao', 'transito', 'acidente', 'rodovia', 'estrada', 'congestionamento', 'viagem', 'transporte'],
+        'Meio Ambiente': ['ambiente', 'sustentabilidade', 'reciclagem', 'poluicao', 'desmatamento', 'conservacao'],
+        'Cotidiano': ['cotidiano', 'comportamento', 'lifestyle', 'moda', 'culinaria', 'hobby', 'viagem'],
+        'Ciência e Tecnologia': ['ciencia', 'pesquisa', 'tecnologia', 'inovacao', 'universidade', 'descoberta', 'espaco']
+    }
+    
+    # 3. Frases compostas (verificação separada, pois são duas ou mais palavras)
+    frases_compostas = {
+        'Meio Ambiente': ['meio ambiente', 'defesa civil'],
+        'Saúde': ['saude mental']
+    }
+    
+    # 4. Contagem de palavras por categoria
+    contagem = {}
+    for cat, palavras in categorias.items():
+        total = sum(len(re.findall(rf'\b{re.escape(palavra)}\b', texto_limpo)) for palavra in palavras)
+        if total > 0:
+            contagem[cat] = total
+    
+    # 5. Adicionar contagem de frases compostas
+    for cat, lista_frases in frases_compostas.items():
+        for frase in lista_frases:
+            if frase in texto_limpo:
+                contagem[cat] = contagem.get(cat, 0) + 1
+    
+    # 6. Se nenhuma palavra foi encontrada, retorna 'Geral'
+    if not contagem:
+        return 'Geral'
+    
+    # 7. Retorna a categoria com maior contagem (em caso de empate, a primeira encontrada)
+    return max(contagem, key=contagem.get)
 
 def extrair_cidade(titulo, corpo, cidades_lista):
     texto_titulo = titulo.lower()

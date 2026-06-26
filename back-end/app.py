@@ -141,7 +141,7 @@ def get_noticias():
             JOIN fontes f ON n.fonte_id = f.id
             LEFT JOIN noticias_lidas nl ON nl.noticia_id = n.id AND nl.usuario_id = %s
             {query_where}
-            ORDER BY n.id DESC LIMIT 300
+            ORDER BY n.id DESC
         """
         params_final = [int(usuario_id)] + params
     else:
@@ -150,7 +150,7 @@ def get_noticias():
             FROM noticias n
             JOIN fontes f ON n.fonte_id = f.id
             {query_where}
-            ORDER BY n.id DESC LIMIT 300
+            ORDER BY n.id DESC
         """
         params_final = params
     cursor.execute(sql, params_final)
@@ -290,7 +290,7 @@ def admin_get_moderacao():
         SELECT n.id, n.titulo, n.data_publicacao, n.cidade_mencionada as cidade, f.nome as fonte_nome, COALESCE(n.oculto, 0) as oculto
         FROM noticias n
         JOIN fontes f ON n.fonte_id = f.id
-        ORDER BY n.id DESC LIMIT 100
+        ORDER BY n.id DESC
     """)
     noticias = cursor.fetchall()
     cursor.close()
@@ -381,13 +381,25 @@ def update_usuario(id):
         db.close()
         return jsonify({'erro': 'erro_interno'}), 500
 
-# ==================== ENDPOINT COM IA (GEMINI) ====================
+# ==================== CONFIGURAÇÃO GEMINI ====================
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 if GEMINI_API_KEY:
     genai_client = genai.Client(api_key=GEMINI_API_KEY)
-    modelo_principal = 'gemini-3.1-flash-lite'
+    # Lista completa com todos os modelos (ordem: maior cota primeiro)
+    MODELOS_GEMINI = [
+        'gemini-3.1-flash-lite',
+        'gemini-3.5-flash',
+        'gemini-3-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-2.5-flash',
+        'gemini-2.5-pro',
+        'gemini-3.1-pro',
+        'gemini-2-flash',
+        'gemini-2-flash-lite'
+    ]
 else:
     genai_client = None
+    MODELOS_GEMINI = []
     print("Aviso: GEMINI_API_KEY não encontrada. O endpoint /resumir-noticia não funcionará.")
 
 def resumir_com_gemini(titulo, corpo, max_caracteres=150):
@@ -409,42 +421,39 @@ NOTÍCIA: {corpo}
 
 RESUMO:"""
 
-    try:
-        response = genai_client.models.generate_content(
-            model=modelo_principal,
-            contents=prompt
-        )
-        if response.text:
-            resumo = response.text.strip()
-            resumo = re.sub(r'^["\']|["\']$', '', resumo)
-            if len(resumo) > max_caracteres:
-                corte = resumo[:max_caracteres]
-                ultimo_espaco = corte.rfind(' ')
-                if ultimo_espaco > 0:
-                    resumo = corte[:ultimo_espaco] + '...'
-                else:
-                    resumo = corte + '...'
-            return resumo
-        else:
-            return "Não foi possível gerar resumo."
-    except Exception as e:
-        print(f"Erro ao gerar resumo: {e}")
-        return f"Erro: {str(e)}"
+    ultimo_erro = None
+    for modelo in MODELOS_GEMINI:
+        try:
+            response = genai_client.models.generate_content(
+                model=modelo,
+                contents=prompt
+            )
+            if response.text:
+                resumo = response.text.strip()
+                resumo = re.sub(r'^["\']|["\']$', '', resumo)
+                if len(resumo) > max_caracteres:
+                    corte = resumo[:max_caracteres]
+                    ultimo_espaco = corte.rfind(' ')
+                    if ultimo_espaco > 0:
+                        resumo = corte[:ultimo_espaco] + '...'
+                    else:
+                        resumo = corte + '...'
+                return resumo
+            # Se resposta vazia, tentar próximo modelo
+            continue
+        except Exception as e:
+            erro_str = str(e)
+            # Se o modelo não existe (404) ou quota esgotada (429), pula
+            if '404' in erro_str or '429' in erro_str or 'RESOURCE_EXHAUSTED' in erro_str:
+                print(f"Modelo {modelo} indisponível: {erro_str[:80]}")
+                continue
+            # Outros erros (timeout, 503, etc.) também tenta próximo
+            print(f"Erro com modelo {modelo}: {erro_str[:80]}")
+            ultimo_erro = e
+            continue
 
-@app.route('/resumir-noticia', methods=['POST'])
-@token_required
-def resumir_noticia():
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
-    dados = request.get_json(force=True, silent=True) or {}
-    titulo = dados.get('titulo', '')
-    corpo = dados.get('texto', '')
-
-    if not corpo or len(corpo.strip()) < 50:
-        return jsonify({'erro': 'Texto muito curto (mínimo 50 caracteres)'}), 400
-
-    resumo = resumir_com_gemini(titulo, corpo, max_caracteres=150)
-    return jsonify({'resumo': resumo})
+    # Se todos falharem
+    return f"Erro ao gerar resumo: {str(ultimo_erro)}" if ultimo_erro else "Erro ao gerar resumo (todos os modelos falharam)."
 
 # ==================== EXECUÇÃO ====================
 if __name__ == '__main__':
